@@ -1,0 +1,93 @@
+
+name: Python Ecommerce CI - ECR-num2
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: self-hosted
+
+    env:
+      AWS_REGION: eu-central-1
+      ECR_REPOSITORY: python-ecommerce-api
+      AWS_ACCOUNT_ID: "257151975682"
+      CONTAINER_NAME: ecommerce-api
+      HOST_PORT: "8000"
+      CONTAINER_PORT: "8000" 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password \
+            --region $AWS_REGION | \
+          docker login \
+            --username AWS \
+            --password-stdin \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Build Docker image
+        run: |
+          docker build -t $ECR_REPOSITORY:${{ github.sha }} .
+
+      - name: Tag Docker image
+        run: |
+          docker tag $ECR_REPOSITORY:${{ github.sha }} \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+
+      - name: Push image to Amazon ECR
+        run: |
+          docker push \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+      - name: Deploy container on EC2
+        run: | 
+          IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+          echo "pulling image from ECR"
+          docker pull $IMAGE_URI
+
+          docker tag $IMAGE_URI ecom-api:latest
+
+          echo "stopping old container"
+          docker stop $CONTAINER_NAME || true
+          docker rm $CONTAINER_NAME || true
+
+          echo "starting new container"
+          docker run -d --name $CONTAINER_NAME -p $HOST_PORT:$CONTAINER_PORT --restart unless-stopped ecom-api:latest
+
+          echo "deployment completed"
+          docker ps
+#      - name:  wait for app 
+#        run: sleep 5
+      - name: health check tests on prd
+        run: | 
+          for i in {1..5}; do
+            if curl -f http://localhost:8000/health ; then
+              echo "healthcheck passed successfuly"
+                if curl -f http://localhost:8000/products/1 ; then
+                  echo "products check passed" 
+                  exit 0
+                fi
+            fi ;
+            echo "attempt $i failed. waiting 3 seconds"
+            sleep 3
+          done
+          echo "application failed to start"
+          exit 1
+
+
+
+
+
+
+
